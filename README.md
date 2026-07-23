@@ -1,86 +1,71 @@
-# Turniej Beer Pong — wersja z bazą danych
+# Turniej u Siary — instrukcja wdrożenia na Vercel
 
-Ten projekt to Twój oryginalny tracker turnieju, tylko że dane (lista
-zawodników i wyniki meczów) są teraz zapisywane po stronie serwera
-(Vercel KV — mały Redis), a nie w pamięci karty przeglądarki. Dzięki temu
-każdy, kto wejdzie pod ten sam adres, widzi te same dane i może je
-edytować (odświeżanie co 5 sekund w tle synchronizuje zmiany między
-telefonami).
+## Co się zmieniło względem Twojego pliku
 
-## Struktura
+1. **PIN wymagany raz na 30 minut** — po poprawnym wpisaniu PIN-u zapisuje się
+   znacznik czasu w `sessionStorage` (`siaryPinVerifiedUntil`). Dopóki nie minie
+   30 minut i karta przeglądarki nie zostanie zamknięta, kolejne akcje
+   (dodawanie graczy, wpisywanie wyników itd.) wykonują się bez pytania o PIN.
+   Po zamknięciu karty albo po 30 minutach PIN jest wymagany ponownie.
+2. **Zdjęcia zawodników trafiają do Vercel Blob**, a nie do bazy jako base64.
+   Po wybraniu pliku frontend zmniejsza go do ~128px (jak dotychczas), wysyła
+   do `/api/upload`, a w stanie turnieju zapisywany jest już tylko publiczny
+   URL zdjęcia z Blob Storage — dzięki temu rekordy w Redisie są dużo mniejsze.
+3. **`/api/state`** korzysta teraz z Upstash Redis (`@upstash/redis`) zamiast
+   nieistniejącego wcześniej backendu.
+
+## Pliki do wgrania do aktywnego projektu Vercel
 
 ```
-index.html      – frontend (ten sam layout co oryginał + synchronizacja z API)
-api/state.js    – serverless function: GET (odczyt) / POST (zapis) stanu
-package.json    – zależność @vercel/kv
+index.html        ← podmień istniejący plik główny
+api/state.js       ← nowy endpoint GET/POST stanu turnieju
+api/upload.js      ← nowy endpoint uploadu zdjęć
+package.json       ← dodaj zależności (jeśli masz już package.json, dopisz
+                      "@upstash/redis" i "@vercel/blob" do "dependencies")
 ```
 
-## Ważne: dlaczego Vercel, a nie GitHub Pages
+Jeśli Twój aktywny projekt jest oparty o Next.js (a nie "czysty" Vercel z
+folderem `api/`), daj znać — trzeba będzie przenieść handlery do
+`pages/api/` lub `app/api/.../route.js` (logika w środku zostaje taka sama,
+zmienia się tylko sygnatura funkcji).
 
-GitHub Pages to hosting **wyłącznie statyczny** — nie ma tam żadnego
-backendu ani miejsca na bazę danych, więc zapisywanie wyników nie
-zadziała, jeśli wrzucisz to tylko tam. Vercel obsługuje zarówno statyczny
-frontend, jak i mikro-API (`api/state.js`) razem z bazą (Vercel KV).
-Możesz jednak trzymać kod na GitHubie i połączyć repo z Vercelem —
-wtedy każdy `git push` automatycznie wdraża nową wersję na Vercel.
+## Konfiguracja bazy danych (Upstash Redis)
 
-## Wdrożenie krok po kroku
+Skoro baza już u Ciebie stoi jako Upstash Redis podpięty przez Vercel:
 
-### 1. Wrzuć kod na GitHuba
+1. W projekcie na Vercel wejdź w **Storage** → sprawdź, czy masz podłączoną
+   bazę Upstash Redis / Vercel KV.
+2. Upewnij się, że w **Settings → Environment Variables** projektu są ustawione
+   (Vercel dodaje je automatycznie po połączeniu integracji):
+   - `UPSTASH_REDIS_REST_URL` i `UPSTASH_REDIS_REST_TOKEN`
+   (albo starsze nazwy `KV_REST_API_URL` / `KV_REST_API_TOKEN` — kod w
+   `api/state.js` obsługuje obie wersje nazw).
+3. Nic więcej nie trzeba konfigurować — endpoint sam odczyta te zmienne.
+
+## Konfiguracja Vercel Blob (przechowywanie zdjęć)
+
+1. W projekcie na Vercel: **Storage → Create Database → Blob** (jeśli jeszcze
+   nie masz podłączonego Blob Store).
+2. Po utworzeniu/podłączeniu Vercel doda automatycznie zmienną środowiskową
+   `BLOB_READ_WRITE_TOKEN` do projektu — `api/upload.js` używa jej niejawnie
+   (pakiet `@vercel/blob` sam ją odczytuje).
+3. Zdjęcia będą trafiać do folderu `avatars/` w Blob Storage jako pliki
+   publiczne (dostępne pod stałym URL-em, bez logowania).
+
+## Instalacja zależności i deploy
+
 ```bash
-cd beerpong-app
-git init
-git add .
-git commit -m "Turniej beer pong z bazą danych"
-git branch -M main
-git remote add origin https://github.com/TWOJ-LOGIN/beerpong-turniej.git
-git push -u origin main
+npm install @upstash/redis @vercel/blob
+vercel deploy --prod
 ```
 
-### 2. Załóż projekt na Vercel
-1. Wejdź na https://vercel.com i zaloguj się (najprościej przez GitHub).
-2. Kliknij **Add New → Project** i wybierz repo `beerpong-turniej`.
-3. Framework Preset zostaw jako **Other** — nie trzeba nic zmieniać w
-   build settings, projekt nie wymaga kroku budowania.
-4. Kliknij **Deploy**. Na tym etapie strona już się wdroży, ale zapis
-   jeszcze nie zadziała, bo brakuje bazy — patrz krok 3.
+(albo po prostu `git push` jeśli projekt jest podpięty pod auto-deploy).
 
-### 3. Podłącz Vercel KV (baza danych)
-1. W panelu projektu na Vercel wejdź w zakładkę **Storage**.
-2. Kliknij **Create Database** → wybierz **KV** (Upstash Redis, plan
-   darmowy w zupełności wystarczy na ten projekt).
-3. Po utworzeniu bazy podłącz ją do projektu (przycisk **Connect Project**
-   przy bazie, jeśli nie zrobi się to automatycznie). Vercel sam doda
-   potrzebne zmienne środowiskowe (`KV_REST_API_URL`, `KV_REST_API_TOKEN`
-   itd.) do projektu.
-4. Zrób redeploy (zakładka **Deployments** → **⋯** przy najnowszym
-   wdrożeniu → **Redeploy**), żeby function `api/state.js` zobaczyła
-   nowe zmienne środowiskowe.
+## Uwaga o bezpieczeństwie PIN-u
 
-### 4. Gotowe
-Otwórz adres projektu (np. `https://beerpong-turniej.vercel.app`) —
-u góry strony powinien pojawić się zielony wskaźnik "Połączono z bazą".
-Dodaj zawodników i wpisuj wyniki — będą widoczne dla każdego, kto wejdzie
-pod ten sam link.
-
-## Wdrożenie przez CLI (alternatywa dla kroku 1-2)
-
-Jeśli wolisz bez GitHuba, z terminala:
-```bash
-npm install -g vercel
-cd beerpong-app
-vercel        # pierwsze wdrożenie, odpowiedz na pytania
-vercel --prod # wdrożenie produkcyjne
-```
-Bazę KV i tak trzeba podłączyć ręcznie w panelu (krok 3 powyżej).
-
-## Znane ograniczenia
-
-- Brak logowania/autoryzacji — każdy ze znajomością adresu strony może
-  edytować dane. Wystarczające na domowy/imprezowy turniej; jeśli
-  potrzebujesz zabezpieczenia, można dodać prosty PIN sprawdzany w
-  `api/state.js`.
-- Dane trzymane są pod jednym kluczem w KV (`beerpong:state`) — jeśli
-  chcesz obsłużyć wiele turniejów jednocześnie, trzeba by dodać
-  identyfikator turnieju w URL i kluczu KV. Daj znać, jeśli to
-  potrzebne — mogę to dopisać.
+PIN (`1337` w kodzie) nadal jest sprawdzany wyłącznie po stronie przeglądarki
+— tak jak w oryginalnym pliku. To znaczy, że każdy, kto zajrzy w kod źródłowy
+strony, PIN zobaczy. Jeśli zależy Ci na realnym zabezpieczeniu zapisu wyników
+(a nie tylko na "furtce przed przypadkowym kliknięciem"), mogę dorobić
+weryfikację PIN-u po stronie serwera (endpoint `/api/verify-pin` zwracający
+jednorazowy token) — daj znać, jeśli chcesz to dodać.
